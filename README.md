@@ -50,7 +50,7 @@ Tweak the constants at the top of the script:
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `RETRY_MINUTES` | `10` | Wait time when Steam rate-limits removals |
+| `RETRY_MINUTES` | `1` | How often to re-check when Steam rate-limits removals. Steam frees roughly one removal slot every ~10 minutes; checking every minute grabs each slot as soon as it opens and catches any faster windows Steam occasionally allows. |
 | `REMOVE_DELAY_MS` | `3000` | Pause between individual removals |
 | `PAGE_SETTLE_MS` | `800` | Pause after each page load during the scan |
 
@@ -58,14 +58,15 @@ Tweak the constants at the top of the script:
 
 1. **Scan** — opens a popup on the licenses page and clicks Steam's real *Next* link page after page (direct URL fetches get redirected — Steam requires genuine navigations with the right referrer). On each page it parses the `RemoveFreeLicense(packageid, base64Name)` links, base64-decodes the names, and keeps only whole-word "Demo" titles.
 2. **Confirm** — shows the count and a sample of names; nothing is removed until you click OK.
-3. **Remove** — POSTs each package to Steam's own `account/removelicense` endpoint with your session ID. `success: 1` → next item; `success: 84` (rate-limited) → wait and retry; anything else → skip and report at the end.
+3. **Remove** — POSTs each package to Steam's own `account/removelicense` endpoint with your session ID. `success: 1` → next item; `success: 84` (rate-limited) → wait and retry; any other error → the item is moved to the back of the queue and retried later (never dropped), with a running tally of error codes logged to the console.
 
 ## Troubleshooting
 
 - **"Popup blocked"** — allow popups for `store.steampowered.com` and paste the script again.
 - **Scan keeps restarting** — Steam's pagination tokens expire quickly; the script retries up to 5 times. Check your connection and rerun.
-- **Rate-limited forever** — normal for huge accounts. Steam allows roughly a dozen removals per cooldown window; thousands of demos take days. The script is built for exactly this — leave it running or resume later.
-- **Failed items at the end** — listed in a table when the script finishes. Rerun the script (fresh scan) to retry them.
+- **Rate-limited forever** — normal. Steam's sustained limit is roughly **one removal per 10 minutes** (~144/day), with occasional small bursts. Hundreds of demos take days; tens of thousands take months. The script is built for exactly this — leave it running, or stop and resume whenever you like (progress is never lost).
+- **Repeating `❌ Error N` lines** — Steam refused those removals with error code `N`; the script keeps them in the queue and retries automatically. If a code repeats endlessly, your session may have expired — refresh the page, log in if needed, and paste the script again.
+- **Massive accounts** — if you have tens of thousands of demos, consider also asking [Steam Support](https://help.steampowered.com) to bulk-remove them; they have tools users don't. The script can keep running in the meantime.
 
 ## Disclaimer
 
