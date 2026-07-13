@@ -19,7 +19,7 @@
 (async () => {
   window.stopDemoRemoval = false;
 
-  const RETRY_MINUTES = 10;      // wait when rate-limited
+  const RETRY_MINUTES = 1;       // wait when rate-limited
   const REMOVE_DELAY_MS = 3000;  // pause between removals
   const PAGE_SETTLE_MS = 800;    // pause after each popup page load
   const QUEUE_KEY = 'demoRemovalQueue';
@@ -135,13 +135,14 @@
       credentials: 'include'
     }).then(r => r.json()).catch(() => ({ success: -1 }));
 
-  let removed = 0, failed = [];
+  let removed = 0, failStreak = 0;
+  const errCounts = {};
   while (demos.length) {
     if (window.stopDemoRemoval) return log(`Stopped. ${removed} removed this run, ${demos.length} left (saved — rerun to resume).`);
     const d = demos[0];
     const res = await remove(d);
     if (res.success === 1) {
-      demos.shift(); removed++;
+      demos.shift(); removed++; failStreak = 0;
       localStorage.setItem(QUEUE_KEY, JSON.stringify(demos));
       log(`✅ Removed (${removed} done, ${demos.length} left):`, d.name);
       await sleep(REMOVE_DELAY_MS);
@@ -149,17 +150,18 @@
       log(`⏳ Rate-limited. ${removed} removed this run, ${demos.length} left. Waiting ${RETRY_MINUTES} min...`);
       await sleep(RETRY_MINUTES * 60 * 1000);
     } else {
-      demos.shift(); failed.push(d);
+      // NEVER drop the item — move it to the back of the queue and retry later.
+      demos.push(demos.shift());
+      failStreak++;
+      errCounts[res.success] = (errCounts[res.success] || 0) + 1;
       localStorage.setItem(QUEUE_KEY, JSON.stringify(demos));
-      log('❌ Failed (skipped):', d.name, res);
-      await sleep(REMOVE_DELAY_MS);
+      log(`❌ Error ${res.success} (kept in queue, will retry):`, d.name, '— error counts so far:', JSON.stringify(errCounts));
+      // If everything is failing repeatedly, back off hard instead of churning.
+      await sleep(failStreak >= 20 ? RETRY_MINUTES * 60 * 1000 : REMOVE_DELAY_MS);
+      if (failStreak >= 20) failStreak = 0;
     }
   }
 
   localStorage.removeItem(QUEUE_KEY);
   log(`🎉 Finished. ${removed} demos removed this run.`);
-  if (failed.length) {
-    log(`⚠️ ${failed.length} failed — listed below. Rerun the script later to retry them (a rescan will find them again).`);
-    console.table(failed);
-  }
 })();
