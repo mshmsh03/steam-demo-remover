@@ -126,37 +126,62 @@
   }
   log(`Full list: console.table(JSON.parse(localStorage.getItem('${QUEUE_KEY}')))`);
 
-  // ---- PHASE 2: remove with rate-limit backoff ----
+  // ---- PHASE 2: remove with rate-limit backoff + self-healing session ----
+  let sessionId = (typeof g_sessionID !== 'undefined' && g_sessionID) || '';
+
+  // Steam rotates session tokens during long runs (removals then fail with
+  // error 21 "NotLoggedOn"). Re-fetch the licenses page and pull a fresh token.
+  const refreshSession = async () => {
+    try {
+      const html = await fetch('https://store.steampowered.com/account/licenses/', { credentials: 'include' })
+        .then(r => r.text());
+      if (/login/i.test(html) && !/g_sessionID/.test(html)) return 'logged_out';
+      const m = html.match(/g_sessionID\s*=\s*["']([^"']+)["']/);
+      if (m) { sessionId = m[1]; return 'refreshed'; }
+      return 'no_token';
+    } catch (e) { return 'fetch_error'; }
+  };
+
   const remove = d =>
     fetch('https://store.steampowered.com/account/removelicense', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `sessionid=${encodeURIComponent(g_sessionID)}&packageid=${d.packageid}`,
+      body: `sessionid=${encodeURIComponent(sessionId)}&packageid=${d.packageid}`,
       credentials: 'include'
     }).then(r => r.json()).catch(() => ({ success: -1 }));
 
-  let removed = 0, failStreak = 0;
+  let removed = 0, failStreak = 0, sessionFails = 0;
   const errCounts = {};
   while (demos.length) {
     if (window.stopDemoRemoval) return log(`Stopped. ${removed} removed this run, ${demos.length} left (saved — rerun to resume).`);
     const d = demos[0];
     const res = await remove(d);
     if (res.success === 1) {
-      demos.shift(); removed++; failStreak = 0;
+      demos.shift(); removed++; failStreak = 0; sessionFails = 0;
       localStorage.setItem(QUEUE_KEY, JSON.stringify(demos));
       log(`✅ Removed (${removed} done, ${demos.length} left):`, d.name);
       await sleep(REMOVE_DELAY_MS);
-    } else if (res.success === 84) {
-      log(`⏳ Rate-limited. ${removed} removed this run, ${demos.length} left. Waiting ${RETRY_MINUTES} min...`);
+    } else if (res.success === 84 || res.success === 29) {
+      // 84 = rate limited, 29 = duplicate/too-fast — both mean "wait, then retry"
+      log(`⏳ Rate-limited (code ${res.success}). ${removed} removed this run, ${demos.length} left. Waiting ${RETRY_MINUTES} min...`);
       await sleep(RETRY_MINUTES * 60 * 1000);
+    } else if (res.success === 21) {
+      // 21 = session token stale — refresh it and retry the SAME item.
+      sessionFails++;
+      const outcome = await refreshSession();
+      if (outcome === 'logged_out') {
+        return log('🔒 You are logged out of Steam. Log back in, then paste the script again — it will resume.');
+      }
+      log(`🔑 Session expired (21) — token ${outcome}. Retrying... (${sessionFails} session refreshes this run)`);
+      // If refreshing doesn't help repeatedly, slow way down instead of spamming.
+      await sleep(sessionFails > 5 ? RETRY_MINUTES * 60 * 1000 : 5000);
     } else {
-      // NEVER drop the item — move it to the back of the queue and retry later.
+      // Unknown error — NEVER drop the item; move to back of queue, retry later.
       demos.push(demos.shift());
       failStreak++;
       errCounts[res.success] = (errCounts[res.success] || 0) + 1;
       localStorage.setItem(QUEUE_KEY, JSON.stringify(demos));
       log(`❌ Error ${res.success} (kept in queue, will retry):`, d.name, '— error counts so far:', JSON.stringify(errCounts));
-      // If everything is failing repeatedly, back off hard instead of churning.
       await sleep(failStreak >= 20 ? RETRY_MINUTES * 60 * 1000 : REMOVE_DELAY_MS);
       if (failStreak >= 20) failStreak = 0;
     }
