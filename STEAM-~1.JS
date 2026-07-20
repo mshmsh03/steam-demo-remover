@@ -161,10 +161,19 @@
       localStorage.setItem(QUEUE_KEY, JSON.stringify(demos));
       log(`✅ Removed (${removed} done, ${demos.length} left):`, d.name);
       await sleep(REMOVE_DELAY_MS);
-    } else if (res.success === 84 || res.success === 29) {
-      // 84 = rate limited, 29 = duplicate/too-fast — both mean "wait, then retry"
-      log(`⏳ Rate-limited (code ${res.success}). ${removed} removed this run, ${demos.length} left. Waiting ${RETRY_MINUTES} min...`);
+    } else if (res.success === 84) {
+      // 84 = genuine rate limit — wait, then retry the same item.
+      log(`⏳ Rate-limited (code 84). ${removed} removed this run, ${demos.length} left. Waiting ${RETRY_MINUTES} min...`);
       await sleep(RETRY_MINUTES * 60 * 1000);
+    } else if (res.success === 29) {
+      // 29 = DuplicateRequest — Steam's way of saying this license is ALREADY
+      // gone (removed earlier, by this script or otherwise). Treat as done and
+      // move on immediately — do NOT wait or re-try, that just gets the whole
+      // queue stuck forever on one already-removed item.
+      demos.shift(); removed++;
+      localStorage.setItem(QUEUE_KEY, JSON.stringify(demos));
+      log(`✅ Already removed previously (${removed} done, ${demos.length} left):`, d.name);
+      await sleep(300);
     } else if (res.success === 21) {
       // 21 = session token stale — refresh it and retry the SAME item.
       sessionFails++;
