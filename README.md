@@ -8,6 +8,8 @@ Steam has no bulk-remove option. If your account has accumulated hundreds or tho
 
 - **Pagination** — Steam shows only 100 licenses per page, and its pagination tokens only work for real page navigations. The script drives a small popup window through every page like a real user to collect all demos.
 - **Rate limiting** — Steam only allows a small batch of removals at a time (error `84`). The script waits out each cooldown and resumes automatically, for as long as it takes.
+- **Session expiry** — on long runs Steam's session token can go stale mid-run (error `21`). The script silently re-fetches a fresh token and keeps going, instead of dying.
+- **Already-removed items** — if an item was already removed (by an earlier run, or elsewhere) Steam returns error `29` ("duplicate request") instead of success. The script recognizes this as *done* and moves on immediately, instead of getting stuck retrying something that's already gone.
 
 ## Safety
 
@@ -58,15 +60,22 @@ Tweak the constants at the top of the script:
 
 1. **Scan** — opens a popup on the licenses page and clicks Steam's real *Next* link page after page (direct URL fetches get redirected — Steam requires genuine navigations with the right referrer). On each page it parses the `RemoveFreeLicense(packageid, base64Name)` links, base64-decodes the names, and keeps only whole-word "Demo" titles.
 2. **Confirm** — shows the count and a sample of names; nothing is removed until you click OK.
-3. **Remove** — POSTs each package to Steam's own `account/removelicense` endpoint with your session ID. `success: 1` → next item; `success: 84` (rate-limited) → wait and retry; any other error → the item is moved to the back of the queue and retried later (never dropped), with a running tally of error codes logged to the console.
+3. **Remove** — POSTs each package to Steam's own `account/removelicense` endpoint with your session ID, and reads the numeric `success` code it returns:
+   - `1` → removed. Next item.
+   - `84` → genuinely rate-limited. Wait, then retry the *same* item.
+   - `29` → "duplicate request" — this item was already removed (by an earlier run, or otherwise). Counted as done, no wait, move on immediately.
+   - `21` → session token expired. Silently fetch a fresh token and retry the same item.
+   - anything else → unknown error. The item is moved to the back of the queue and retried later (never dropped), with a running tally of error codes logged to the console.
 
 ## Troubleshooting
 
 - **"Popup blocked"** — allow popups for `store.steampowered.com` and paste the script again.
 - **Scan keeps restarting** — Steam's pagination tokens expire quickly; the script retries up to 5 times. Check your connection and rerun.
-- **Rate-limited forever** — normal. Steam's sustained limit is roughly **one removal per 10 minutes** (~144/day), with occasional small bursts. Hundreds of demos take days; tens of thousands take months. The script is built for exactly this — leave it running, or stop and resume whenever you like (progress is never lost).
-- **Repeating `❌ Error N` lines** — Steam refused those removals with error code `N`; the script keeps them in the queue and retries automatically. If a code repeats endlessly, your session may have expired — refresh the page, log in if needed, and paste the script again.
-- **Massive accounts** — if you have tens of thousands of demos, consider also asking [Steam Support](https://help.steampowered.com) to bulk-remove them; they have tools users don't. The script can keep running in the meantime.
+- **Rate-limited forever (`⏳ Rate-limited (code 84)`)** — normal. Steam's sustained limit varies over time — sometimes roughly one removal per 10 minutes, sometimes bursts of dozens per hour. Hundreds of demos may take days; tens of thousands can take months at the slow end. The script is built for exactly this — leave it running, or stop and resume whenever you like (progress is never lost).
+- **Lots of `✅ Already removed previously` lines** — expected right after resuming a queue that's been running a while, or after a rescan. It just means Steam confirms those licenses are already gone; the script is clearing stale entries, not doing new work. It should give way to genuine new removals shortly after.
+- **Repeating `❌ Error N` lines** (any code other than 1, 21, 29, 84) — Steam refused those removals with error code `N`; the script keeps them in the queue and retries automatically. If a code repeats endlessly and nothing else is progressing, refresh the page, confirm you're still logged in, and paste the script again.
+- **`🔒 You are logged out of Steam`** — the script detected your session is gone rather than just stale. Log back in and paste the script again; it resumes from where it stopped.
+- **Massive accounts** — if you have tens of thousands of demos, consider also asking [Steam Support](https://help.steampowered.com) to bulk-remove them; they have tools users don't. The script can keep running in the meantime — nothing is lost by doing both.
 
 ## Disclaimer
 
